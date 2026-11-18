@@ -9,6 +9,22 @@ backend_dir = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(backend_dir))
 
 from app.main import app
+from app.services.image_service import get_image_service
+
+
+@pytest.fixture(autouse=True)
+def mock_yolo_for_upload(monkeypatch):
+    image_svc = get_image_service()
+    async def mock_detect(*args, **kwargs):
+        return {
+            "detections": [],
+            "count": 0,
+            "image_dimensions": {"width": 200, "height": 200},
+            "latency_ms": 1.0,
+            "device": "cpu",
+            "model": "mock",
+        }
+    monkeypatch.setattr(image_svc.yolo_client, "detect_objects_async", mock_detect)
 
 
 def create_test_image(format="JPEG", size=(200, 200), color="blue") -> bytes:

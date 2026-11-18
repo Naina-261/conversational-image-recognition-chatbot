@@ -1,4 +1,6 @@
 import pytest
+pytest.importorskip("torch", reason="torch is required for live YOLO model execution")
+pytest.importorskip("ultralytics", reason="ultralytics is required for live YOLO model execution")
 import numpy as np
 from PIL import Image
 import io

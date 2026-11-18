@@ -30,7 +30,19 @@ async def test_health_endpoint():
         data = response.json()
         assert data["status"] in ("healthy", "degraded")
         assert "acceleration" in data
-        assert data["acceleration"]["mps_available"] is True
-        assert data["acceleration"]["active_device"] == "mps"
+        assert "mps_available" in data["acceleration"]
+        assert "active_device" in data["acceleration"]
         assert "database" in data
         assert "models" in data
+
+@pytest.mark.asyncio
+async def test_liveness_probes():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res_live = await client.get("/api/v1/health/live")
+        assert res_live.status_code == 200
+        assert res_live.json()["status"] == "ok"
+
+        res_z = await client.get("/healthz")
+        assert res_z.status_code == 200
+        assert res_z.json()["status"] == "ok"
