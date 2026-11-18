@@ -45,16 +45,14 @@ class ImageRepository:
         return result.scalar_one_or_none()
 
     @staticmethod
-    async def save_detected_objects(
-        db: AsyncSession,
-        image_id: UUID,
-        detections: List[dict],
-    ) -> List[DetectedObjectModel]:
+    def _build_detected_objects(image_id: UUID, detections: List[dict]) -> List[DetectedObjectModel]:
+        """Helper to instantiate DetectedObjectModel list without code duplication."""
         db_objs = []
         for d in detections:
             bbox = d.get("bbox", {})
+            obj_id = UUID(str(d["id"])) if d.get("id") else uuid4()
             obj = DetectedObjectModel(
-                id=UUID(d["id"]) if d.get("id") else uuid4(),
+                id=obj_id,
                 image_id=image_id,
                 class_name=d.get("class_name", "object"),
                 confidence_score=d.get("confidence", 1.0),
@@ -63,13 +61,25 @@ class ImageRepository:
                 bbox_x_max=bbox.get("x_max", 0.0),
                 bbox_y_max=bbox.get("y_max", 0.0),
             )
-            db.add(obj)
             db_objs.append(obj)
+        return db_objs
+
+    @classmethod
+    async def save_detected_objects(
+        cls,
+        db: AsyncSession,
+        image_id: UUID,
+        detections: List[dict],
+    ) -> List[DetectedObjectModel]:
+        db_objs = cls._build_detected_objects(image_id, detections)
+        for obj in db_objs:
+            db.add(obj)
         await db.commit()
         return db_objs
 
-    @staticmethod
+    @classmethod
     async def replace_detected_objects(
+        cls,
         db: AsyncSession,
         image_id: UUID,
         detections: List[dict],
@@ -80,26 +90,11 @@ class ImageRepository:
                     DetectedObjectModel.image_id == image_id
                 )
             )
-
-            db_objs = []
-            for d in detections:
-                bbox = d.get("bbox", {})
-                obj = DetectedObjectModel(
-                    id=UUID(d["id"]) if d.get("id") else uuid4(),
-                    image_id=image_id,
-                    class_name=d.get("class_name", "object"),
-                    confidence_score=d.get("confidence", 1.0),
-                    bbox_x_min=bbox.get("x_min", 0.0),
-                    bbox_y_min=bbox.get("y_min", 0.0),
-                    bbox_x_max=bbox.get("x_max", 0.0),
-                    bbox_y_max=bbox.get("y_max", 0.0),
-                )
+            db_objs = cls._build_detected_objects(image_id, detections)
+            for obj in db_objs:
                 db.add(obj)
-                db_objs.append(obj)
-
             await db.commit()
             return db_objs
-
         except Exception:
             await db.rollback()
             raise
