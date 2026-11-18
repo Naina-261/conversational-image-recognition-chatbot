@@ -1,171 +1,59 @@
 from fastapi import APIRouter, UploadFile, File, Form, Depends, status, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 from uuid import UUID, uuid4
-from datetime import datetime
-from pathlib import Path
+from typing import Optional
 
 from app.core.database import get_db
-from app.repositories.session_repo import SessionRepository
-from app.repositories.image_repo import ImageRepository
-from app.services.image_processing import validate_and_save_image
-from app.services.yolo_service import get_yolo_service
-from app.schemas.image import ImageResponse, DetectedObjectSchema, BoundingBox
-from app.core.exceptions import EntityNotFoundError
-from app.config import get_settings
+from app.services.image_service import get_image_service, ImageService
+from app.schemas.image import ImageResponse
 
 router = APIRouter()
-settings = get_settings()
 
 
 @router.post("/upload", response_model=ImageResponse, status_code=status.HTTP_201_CREATED)
 async def upload_image_endpoint(
-    file: UploadFile = File(...),
-    session_id: UUID = Form(default_factory=uuid4),
+    file: UploadFile = File(..., description="Image binary file (JPEG, PNG, WebP)"),
+    session_id: UUID = Form(default_factory=uuid4, description="Target conversation session UUID"),
     db: AsyncSession = Depends(get_db),
+    image_service: ImageService = Depends(get_image_service),
 ):
-    # 1. Ensure target session exists in DB (or create automatically)
-    session = await SessionRepository.get_by_id(db, session_id, load_relations=False)
-    if not session:
-        session = await SessionRepository.create(
-            db, title=f"Recon ({file.filename or 'Image'})", session_id=session_id
-        )
-
-    # 2. Ingest and save image file
-    contents = await file.read()
-    image_meta = await validate_and_save_image(
-        file_bytes=contents,
-        original_filename=file.filename or "uploaded_image.jpg",
-    )
-    del contents
-    from app.utils.memory import trim_process_memory
-    trim_process_memory()
-
-    # 3. Save Image record via Repository
-    db_image = await ImageRepository.create(
-        db,
-        image_id=image_meta["id"],
+    """
+    Ingests an uploaded image with memory-safe streaming verification,
+    stores it with a unique UUID, and runs deep-learning YOLO object detection.
+    """
+    return await image_service.upload_and_process_image(
+        db=db,
+        file=file,
         session_id=session_id,
-        filename=image_meta["filename"],
-        storage_path=image_meta["storage_path"],
-        mime_type=image_meta["mime_type"],
-        file_size_bytes=image_meta["file_size_bytes"],
-        width=image_meta["width"],
-        height=image_meta["height"],
-    )
-
-    # 4. Run real YOLOv8 detection pass with concurrency control to prevent RAM spikes
-    yolo = get_yolo_service()
-    detection_results = await yolo.detect_objects_async(
-        image_source=image_meta["storage_path"],
-        conf_threshold=settings.CONFIDENCE_THRESHOLD,
-        orig_dimensions=(image_meta["width"], image_meta["height"]),
-    )
-
-    # 5. Persist detected objects to PostgreSQL via Repository
-    await ImageRepository.save_detected_objects(
-        db,
-        image_id=db_image.id,
-        detections=detection_results["detections"],
-    )
-
-    detected_schemas = [
-        DetectedObjectSchema(
-            id=UUID(d["id"]),
-            class_name=d["class_name"],
-            confidence=d["confidence"],
-            bbox=BoundingBox(
-                x_min=d["bbox"]["x_min"],
-                y_min=d["bbox"]["y_min"],
-                x_max=d["bbox"]["x_max"],
-                y_max=d["bbox"]["y_max"],
-            ),
-            normalized_bbox=BoundingBox(
-                x_min=d["normalized_bbox"]["x_min"],
-                y_min=d["normalized_bbox"]["y_min"],
-                x_max=d["normalized_bbox"]["x_max"],
-                y_max=d["normalized_bbox"]["y_max"],
-            ) if "normalized_bbox" in d else None,
-        )
-        for d in detection_results["detections"]
-    ]
-
-    return ImageResponse(
-        id=db_image.id,
-        session_id=session_id,
-        filename=db_image.filename,
-        file_size_bytes=db_image.file_size_bytes,
-        width=db_image.width,
-        height=db_image.height,
-        mime_type=db_image.mime_type,
-        url=image_meta["url"],
-        detected_objects=detected_schemas,
-        created_at=db_image.created_at,
     )
 
 
-@router.post("/{image_id}/detect", response_model=ImageResponse)
+@router.post("/{image_id}/detect", response_model=ImageResponse, status_code=status.HTTP_200_OK)
 async def rerun_detection_endpoint(
     image_id: UUID,
-    confidence_threshold: float = Query(default=0.35, ge=0.05, le=0.95),
+    confidence_threshold: float = Query(
+        default=0.35, ge=0.01, le=1.0, description="Detection confidence threshold"
+    ),
     db: AsyncSession = Depends(get_db),
+    image_service: ImageService = Depends(get_image_service),
 ):
-    image = await ImageRepository.get_by_id(db, image_id, load_objects=False)
-    if not image:
-        raise EntityNotFoundError(f"Image {image_id} not found.")
-
-    yolo = get_yolo_service()
-    detection_results = await yolo.detect_objects_async(
-        image_source=image.storage_path,
-        conf_threshold=confidence_threshold,
-        orig_dimensions=(image.width, image.height),
-    )
-
-    await ImageRepository.replace_detected_objects(
-        db,
-        image_id=image.id,
-        detections=detection_results["detections"],
-    )
-
-    detected_schemas = [
-        DetectedObjectSchema(
-            id=UUID(d["id"]),
-            class_name=d["class_name"],
-            confidence=d["confidence"],
-            bbox=BoundingBox(
-                x_min=d["bbox"]["x_min"],
-                y_min=d["bbox"]["y_min"],
-                x_max=d["bbox"]["x_max"],
-                y_max=d["bbox"]["y_max"],
-            ),
-            normalized_bbox=BoundingBox(
-                x_min=d["normalized_bbox"]["x_min"],
-                y_min=d["normalized_bbox"]["y_min"],
-                x_max=d["normalized_bbox"]["x_max"],
-                y_max=d["normalized_bbox"]["y_max"],
-            ) if "normalized_bbox" in d else None,
-        )
-        for d in detection_results["detections"]
-    ]
-
-    return ImageResponse(
-        id=image.id,
-        session_id=image.session_id,
-        filename=image.filename,
-        file_size_bytes=image.file_size_bytes,
-        width=image.width,
-        height=image.height,
-        mime_type=image.mime_type,
-        url=f"/uploads/{Path(image.storage_path).name}",
-        detected_objects=detected_schemas,
-        created_at=image.created_at,
+    """
+    Re-runs YOLO deep-learning object detection on an existing image
+    with a modified confidence slider threshold.
+    """
+    return await image_service.rerun_detection(
+        db=db,
+        image_id=image_id,
+        confidence_threshold=confidence_threshold,
     )
 
 
 @router.get("/{filename}/file")
-async def get_image_file(filename: str):
-    file_path = settings.UPLOAD_DIR / filename
-    if not file_path.exists():
-        raise EntityNotFoundError(f"Image {filename} not found.")
+async def get_image_file(
+    filename: str,
+    image_service: ImageService = Depends(get_image_service),
+):
+    """Streams the raw binary image from local persistent storage."""
+    file_path = image_service.get_image_file_path(filename)
     return FileResponse(path=str(file_path))
