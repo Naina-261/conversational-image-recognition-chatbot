@@ -7,6 +7,34 @@ backend_dir = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(backend_dir))
 
 from app.main import app
+from app.services.image_service import get_image_service
+
+
+@pytest.fixture(autouse=True)
+def mock_yolo_for_sessions(monkeypatch):
+    image_svc = get_image_service()
+    async def mock_detect(*args, **kwargs):
+        return {
+            "detections": [
+                {
+                    "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "class_id": 2,
+                    "class_name": "car",
+                    "confidence": 0.942,
+                    "confidence_percentage": 94.2,
+                    "spatial_sector": "center",
+                    "area_ratio": 0.15,
+                    "bbox": {"x_min": 100.0, "y_min": 150.0, "x_max": 300.0, "y_max": 350.0},
+                    "normalized_bbox": {"x_min": 0.156, "y_min": 0.312, "x_max": 0.468, "y_max": 0.729},
+                }
+            ],
+            "count": 1,
+            "image_dimensions": {"width": 640, "height": 480},
+            "latency_ms": 1.0,
+            "device": "cpu",
+            "model": "mock",
+        }
+    monkeypatch.setattr(image_svc.yolo_client, "detect_objects_async", mock_detect)
 
 
 @pytest.mark.asyncio
@@ -201,6 +229,51 @@ async def test_image_only_session_restoration():
         assert detail["images"][0]["width"] == 320
         assert detail["images"][0]["height"] == 240
         assert "detected_objects" in detail["images"][0]
+
+        # Cleanup
+        await client.delete(f"/api/v1/sessions/{session_id}")
+
+
+@pytest.mark.asyncio
+async def test_clear_session_history():
+    """
+    Verifies that DELETE /api/v1/sessions/{id}/history clears conversation messages
+    while leaving the session record and images intact.
+    """
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.post("/api/v1/sessions", json={"title": "Session Memory Clear Test"})
+        assert res.status_code == 201
+        session_id = res.json()["id"]
+
+        # Send 2 chat messages
+        msg1 = await client.post("/api/v1/chat/message", json={
+            "session_id": session_id,
+            "content": "Message 1 for memory test",
+        })
+        assert msg1.status_code == 200
+
+        msg2 = await client.post("/api/v1/chat/message", json={
+            "session_id": session_id,
+            "content": "Message 2 for memory test",
+        })
+        assert msg2.status_code == 200
+
+        # Verify 4 messages in session detail (2 user + 2 assistant)
+        detail_before = (await client.get(f"/api/v1/sessions/{session_id}")).json()
+        assert len(detail_before["messages"]) == 4
+
+        # Clear conversation history
+        clear_res = await client.delete(f"/api/v1/sessions/{session_id}/history")
+        assert clear_res.status_code == 200
+        clear_data = clear_res.json()
+        assert clear_data["cleared_messages_count"] == 4
+        assert clear_data["session_id"] == session_id
+
+        # Verify session still exists and has 0 messages
+        detail_after = (await client.get(f"/api/v1/sessions/{session_id}")).json()
+        assert detail_after["id"] == session_id
+        assert len(detail_after["messages"]) == 0
 
         # Cleanup
         await client.delete(f"/api/v1/sessions/{session_id}")

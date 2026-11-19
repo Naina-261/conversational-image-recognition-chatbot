@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from uuid import UUID
 from typing import List, Optional, Dict, Any
 from app.models.message import MessageModel
@@ -43,3 +43,15 @@ class MessageRepository:
         )
         result = await db.execute(query)
         return list(result.scalars().all())
+
+    @staticmethod
+    async def delete_by_session(
+        db: AsyncSession,
+        session_id: UUID,
+    ) -> int:
+        """Deletes all messages for a given session. Returns count of deleted messages."""
+        result = await db.execute(
+            delete(MessageModel).where(MessageModel.session_id == session_id)
+        )
+        await db.commit()
+        return result.rowcount or 0

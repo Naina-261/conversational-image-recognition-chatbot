@@ -1,23 +1,29 @@
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
-from typing import List
+from typing import List, Optional
 
 from app.core.database import get_db
-from app.repositories.session_repo import SessionRepository
-from app.schemas.session import SessionCreate, SessionResponse, SessionDetailResponse
-from app.core.exceptions import EntityNotFoundError
+from app.services.session_service import get_session_service, SessionService
+from app.schemas.session import (
+    SessionCreate,
+    SessionResponse,
+    SessionDetailResponse,
+    SessionClearResponse,
+)
 
 router = APIRouter()
 
 
 @router.post("", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
 async def create_session(
-    payload: SessionCreate = None,
+    payload: Optional[SessionCreate] = None,
     db: AsyncSession = Depends(get_db),
+    session_service: SessionService = Depends(get_session_service),
 ):
-    title = payload.title if payload and payload.title else "New Conversation"
-    return await SessionRepository.create(db, title=title)
+    """Creates a new conversation session."""
+    title = payload.title if payload else None
+    return await session_service.create_session(db, title=title)
 
 
 @router.get("", response_model=List[SessionResponse])
@@ -25,28 +31,41 @@ async def list_sessions(
     limit: int = 50,
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
+    session_service: SessionService = Depends(get_session_service),
 ):
-    return await SessionRepository.list_recent(db, limit=limit, offset=offset)
+    """Lists recent conversation sessions with pagination."""
+    return await session_service.list_sessions(db, limit=limit, offset=offset)
 
 
 @router.get("/{session_id}", response_model=SessionDetailResponse)
 async def get_session_detail(
     session_id: UUID,
     db: AsyncSession = Depends(get_db),
+    session_service: SessionService = Depends(get_session_service),
 ):
-    session = await SessionRepository.get_by_id(db, session_id, load_relations=True)
-    if not session:
-        raise EntityNotFoundError(f"Session {session_id} not found.")
-    return session
+    """Retrieves full session detail including message dialogue turns and uploaded images."""
+    return await session_service.get_session_detail(db, session_id=session_id)
 
 
 @router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_session(
     session_id: UUID,
     db: AsyncSession = Depends(get_db),
+    session_service: SessionService = Depends(get_session_service),
 ):
-    session = await SessionRepository.get_by_id(db, session_id, load_relations=False)
-    if not session:
-        raise EntityNotFoundError(f"Session {session_id} not found.")
-    await SessionRepository.delete(db, session)
+    """Permanently deletes a session and cascades associated artifacts."""
+    await session_service.delete_session(db, session_id=session_id)
     return None
+
+
+@router.delete("/{session_id}/history", response_model=SessionClearResponse, status_code=status.HTTP_200_OK)
+async def clear_session_history(
+    session_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    session_service: SessionService = Depends(get_session_service),
+):
+    """
+    Clears all dialogue messages from the specified conversation session
+    while preserving the session record, uploaded images, and object detections.
+    """
+    return await session_service.clear_session_history(db, session_id=session_id)

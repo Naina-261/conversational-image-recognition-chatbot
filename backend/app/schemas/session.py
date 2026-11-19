@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, ConfigDict
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 from app.schemas.chat import MessageResponse
 from app.schemas.image import ImageResponse
@@ -30,6 +30,16 @@ class SessionResponse(SessionBase):
 class SessionDetailResponse(SessionResponse):
     messages: List[MessageResponse] = []
     images: List[ImageResponse] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SessionClearResponse(BaseModel):
+    """Schema returned after clearing dialogue history for a session."""
+    session_id: UUID = Field(..., description="Target session UUID")
+    cleared_messages_count: int = Field(..., description="Number of message records deleted")
+    message: str = Field(default="Session conversation history successfully cleared.")
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     model_config = ConfigDict(from_attributes=True)
 

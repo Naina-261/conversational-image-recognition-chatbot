@@ -5,34 +5,17 @@ from PIL import Image
 import io
 import logging
 from app.core.exceptions import ImageProcessingError
-from app.config import get_settings
+from app.core.config import get_settings
 from app.utils.memory import trim_process_memory
+from app.utils.file_validation import (
+    detect_mime_from_magic_bytes,
+    ALLOWED_EXTENSIONS,
+    MAGIC_SIGNATURES,
+)
 
 logger = logging.getLogger("bel_chatbot.image_service")
 settings = get_settings()
-
-# Allowed MIME types and their magic signatures
-MAGIC_SIGNATURES = {
-    "image/jpeg": [b"\xff\xd8\xff"],
-    "image/png": [b"\x89PNG\r\n\x1a\n"],
-    "image/webp": [b"RIFF"],
-}
-
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 MAX_FILE_BYTES = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
-
-
-def detect_mime_from_magic_bytes(header: bytes) -> str:
-    """
-    Inspect raw binary header bytes to reliably verify actual image type.
-    """
-    if header.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    elif header.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    elif len(header) >= 12 and header.startswith(b"RIFF") and header[8:12] == b"WEBP":
-        return "image/webp"
-    return "application/octet-stream"
 
 
 async def validate_and_save_image(

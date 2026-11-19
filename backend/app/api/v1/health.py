@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
-import torch
 import platform
+import os
 from app.core.database import get_db
-from app.config import get_settings
+from app.core.config import get_settings
 
 router = APIRouter()
 settings = get_settings()
@@ -23,33 +23,49 @@ def get_liveness():
 async def get_health_status(db: AsyncSession = Depends(get_db)):
     """
     Comprehensive system health check:
-    - Verifies PyTorch acceleration device (Apple MPS / CUDA / CPU)
-    - Verifies PostgreSQL async connection
+    - Verifies compute acceleration device (Apple MPS / CUDA / CPU)
+    - Verifies database async connectivity (PostgreSQL or SQLite)
     - Reports system platform & memory metrics
     """
     # 1. Check Database connectivity
     db_status = "disconnected"
     db_version = "unknown"
     try:
-        result = await db.execute(text("SELECT version();"))
+        check_query = (
+            text("SELECT sqlite_version();")
+            if settings.DATABASE_URL.startswith("sqlite")
+            else text("SELECT version();")
+        )
+        result = await db.execute(check_query)
         db_version = result.scalar()
         db_status = "connected"
     except Exception as e:
         db_status = f"error: {str(e)}"
 
-    # 2. Check PyTorch MPS Acceleration
-    mps_available = torch.backends.mps.is_available()
-    mps_built = torch.backends.mps.is_built()
+    # 2. Check Device Acceleration
+    mps_available = False
+    mps_built = False
+    cuda_available = False
+    torch_version = "unknown"
+    try:
+        import torch
+        mps_available = torch.backends.mps.is_available()
+        mps_built = torch.backends.mps.is_built()
+        cuda_available = torch.cuda.is_available()
+        torch_version = torch.__version__
+    except Exception:
+        pass
+
     active_device = settings.INFERENCE_DEVICE
 
     # 3. Process Memory Metrics
-    import os
-    import psutil
+    mem_rss_mb = None
     try:
+        import psutil
         proc = psutil.Process(os.getpid())
         mem_rss_mb = round(proc.memory_info().rss / (1024 * 1024), 2)
     except Exception:
-        mem_rss_mb = None
+        pass
 
     return {
         "status": "healthy" if db_status == "connected" else "degraded",
@@ -70,8 +86,8 @@ async def get_health_status(db: AsyncSession = Depends(get_db)):
             "active_device": active_device,
             "mps_available": mps_available,
             "mps_built": mps_built,
-            "cuda_available": torch.cuda.is_available(),
-            "torch_version": torch.__version__,
+            "cuda_available": cuda_available,
+            "torch_version": torch_version,
         },
         "platform": {
             "system": platform.system(),

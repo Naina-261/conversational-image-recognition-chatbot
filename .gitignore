@@ -41,6 +41,14 @@ share/python-wheels/
 venv/
 ENV/
 env/
+.mypy_cache/
+.ruff_cache/
+
+# SQLite & Databases
+*.sqlite
+*.sqlite3
+*.db
+test.db
 
 # PyTest & Coverage
 .pytest_cache/
@@ -70,6 +78,8 @@ yolov8*.pt
 # Uploaded User Files (Keep directory structure via .gitkeep)
 backend/uploads/*
 !backend/uploads/.gitkeep
+uploads/*
+!uploads/.gitkeep
 
 # IDE & Editors
 .vscode/

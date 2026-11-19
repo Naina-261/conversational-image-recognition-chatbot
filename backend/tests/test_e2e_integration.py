@@ -20,21 +20,44 @@ def generate_recon_sample_image() -> bytes:
 
 
 @pytest.mark.asyncio
-async def test_full_multimodal_e2e_pipeline():
+async def test_full_multimodal_e2e_pipeline(monkeypatch):
     transport = ASGITransport(app=app)
 
-    # Mock BLIP service answer_question to avoid multi-gigabyte downloads during fast test execution
-    mock_blip = MagicMock()
-    mock_blip.answer_question.return_value = {
-        "question": "What objects or equipment do you observe in this image?",
-        "answer": "military vehicle",
-        "latency_ms": 28.5,
-        "device": "mps",
-        "model": "Salesforce/blip-vqa-base",
-    }
+    # Mock AI clients (YOLO and VQA) to ensure isolated, deterministic testing without live APIs
+    async def mock_detect(*args, **kwargs):
+        return {
+            "detections": [
+                {
+                    "id": "e2e00000-0000-0000-0000-000000000001",
+                    "class_id": 1,
+                    "class_name": "military vehicle",
+                    "confidence": 0.95,
+                    "confidence_percentage": 95.0,
+                    "spatial_sector": "center",
+                    "area_ratio": 0.25,
+                    "bbox": {"x_min": 150.0, "y_min": 120.0, "x_max": 490.0, "y_max": 380.0},
+                    "normalized_bbox": {"x_min": 0.234, "y_min": 0.25, "x_max": 0.765, "y_max": 0.791},
+                }
+            ],
+            "count": 1,
+            "image_dimensions": {"width": 640, "height": 480},
+            "latency_ms": 12.0,
+            "device": "cpu",
+            "model": "yolov8n.pt",
+        }
 
-    with patch("app.api.v1.chat.get_blip_service", return_value=mock_blip):
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
+    def mock_vqa(*args, **kwargs):
+        return {
+            "answer": "military vehicle",
+            "model": "gemini-2.0-flash",
+            "latency_ms": 25.0,
+            "error": None,
+        }
+
+    monkeypatch.setattr("app.clients.yolo_client.YOLOClient.detect_objects_async", mock_detect)
+    monkeypatch.setattr("app.clients.vqa_client.VQAClient.answer_question", mock_vqa)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
             # 1. Create a new conversation session
             session_res = await client.post("/api/v1/sessions", json={"title": "BEL Tactical E2E Surveillance"})
             assert session_res.status_code == 201

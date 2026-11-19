@@ -1,5 +1,4 @@
 import pytest
-import torch
 import sys
 from pathlib import Path
 
@@ -12,11 +11,14 @@ from app.services.yolo_service import YOLOService, get_yolo_service
 def test_yolo_service_device_resolution():
     service = YOLOService(model_name="yolov8n.pt")
     assert service.model_name == "yolov8n.pt"
-    # Verify device is mps on macOS with Apple Silicon
-    if torch.backends.mps.is_available():
-        assert service.device == "mps"
-    else:
-        assert service.device in ("cuda", "cpu")
+    try:
+        import torch
+        if torch.backends.mps.is_available():
+            assert service.device == "mps"
+        else:
+            assert service.device in ("cuda", "cpu")
+    except ImportError:
+        assert service.device in ("mps", "cuda", "cpu")
 
 
 def test_yolo_singleton():

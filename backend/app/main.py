@@ -29,8 +29,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import logging
 
-from app.config import get_settings
-from app.core.exceptions import AppException, app_exception_handler, global_exception_handler
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app.core.config import get_settings
+from app.core.exceptions import (
+    AppException,
+    app_exception_handler,
+    request_validation_exception_handler,
+    http_exception_handler,
+    global_exception_handler,
+)
 from app.core.logging_middleware import RequestLoggingMiddleware
 from app.utils.logger import setup_logger, get_logger
 from app.core.database import engine, init_db
@@ -101,6 +110,8 @@ def create_app() -> FastAPI:
 
     # Exception Handlers
     app.add_exception_handler(AppException, app_exception_handler)
+    app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
+    app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(Exception, global_exception_handler)
 
     # Static file serving for uploaded imagery

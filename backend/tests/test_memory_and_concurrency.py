@@ -1,6 +1,5 @@
 import pytest
 import os
-import psutil
 from pathlib import Path
 from PIL import Image
 from app.services.yolo_service import get_yolo_service
@@ -14,6 +13,10 @@ async def test_yolo_concurrency_and_memory_stability(tmp_path):
     Verifies that YOLO inference executes within memory bounds and memory remains
     stable across repeated inference passes without memory leaks.
     """
+    psutil = pytest.importorskip("psutil", reason="psutil is required for memory profiling")
+    if not SAMPLE_IMAGE.exists():
+        pytest.skip(f"Sample asset not found at {SAMPLE_IMAGE}")
+
     yolo = get_yolo_service()
     assert yolo is not None
 
